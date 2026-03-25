@@ -1,5 +1,5 @@
 ---
-name: xfg-zsxq
+name: xfg-zsxq-skills
 description: "知识星球自动发帖技能。当你需要向小傅哥的知识星球发布内容时使用。触发词：'知识星球'、'发帖'、'发星球'、'zsxq'、'发布到星球'。需要提供 cookie、签名和时间戳参数。"
 author: xiaofuge
 license: MIT
