@@ -1,17 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * 知识星球 CLI 工具
- * 支持多星球配置管理，无需额外依赖
+ * 知识星球 CLI 工具 v2.0
+ * 支持多星球配置 + 图片上传（最多9张）
  *
  * 命令：
- *   node zsxq.js config add    --name "小傅哥星球" --url "https://wx.zsxq.com/group/48885154455258" --cookie "..."
+ *   node zsxq.js config add    --url "https://wx.zsxq.com/group/ID" --cookie "..."
  *   node zsxq.js config list
- *   node zsxq.js config remove --name "小傅哥星球"
- *   node zsxq.js config default --name "小傅哥星球"
- *   node zsxq.js post          --name "小傅哥星球" --text "帖子内容"
- *   node zsxq.js post          --text "帖子内容"   (使用默认星球)
- *   node zsxq.js post          --file "/path/to/post.txt"  (从文件读取内容)
+ *   node zsxq.js post          --text "内容" [--images "/path/a.jpg,/path/b.png"]
+ *   node zsxq.js post          --file "/path/post.txt" --images "/path/a.jpg"
  */
 
 const https = require('https');
@@ -24,325 +21,309 @@ const os = require('os');
 const CONFIG_DIR = path.join(os.homedir(), '.xfg-zsxq');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'groups.json');
 
-// ─── 配置管理 ────────────────────────────────────────────
+// ─── 颜色输出 ────────────────────────────────────────────
+const R = '\x1b[31m', G = '\x1b[32m', Y = '\x1b[33m', B = '\x1b[36m', N = '\x1b[0m';
+const ok  = (m) => console.log(`${G}✓ ${m}${N}`);
+const err = (m) => console.error(`${R}✗ ${m}${N}`);
+const inf = (m) => console.log(`${B}ℹ ${m}${N}`);
 
+// ─── 工具函数 ────────────────────────────────────────────
 function loadConfig() {
-    if (!fs.existsSync(CONFIG_FILE)) return { default: null, groups: {} };
     try {
-        return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-    } catch {
-        return { default: null, groups: {} };
-    }
+        return fs.existsSync(CONFIG_FILE)
+            ? JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'))
+            : { default: null, groups: {} };
+    } catch { return { default: null, groups: {} }; }
 }
 
-function saveConfig(config) {
+function saveConfig(cfg) {
     if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), { mode: 0o600 });
 }
 
-// 从 URL 中提取星球 ID
 function extractGroupId(url) {
-    const match = url.match(/\/group\/(\d+)/);
-    return match ? match[1] : null;
+    const m = url.match(/\/group\/(\d+)/);
+    return m ? m[1] : null;
 }
 
-// 从 cookie 中提取 token
-function extractToken(cookie) {
-    const match = cookie.match(/zsxq_access_token=([^;]+)/);
-    return match ? match[1].trim() : null;
+function genSig(timestamp, body) {
+    const md5 = crypto.createHash('md5').update(body || '').digest('hex');
+    return crypto.createHash('sha1').update(timestamp + md5).digest('hex');
 }
 
-// ─── 签名算法 ────────────────────────────────────────────
-
-function generateSignature(timestamp, body) {
-    const bodyMd5 = crypto.createHash('md5').update(body).digest('hex');
-    const signature = crypto.createHash('sha1').update(timestamp + bodyMd5).digest('hex');
-    return signature;
-}
-
-function generateUUID() {
+function genUUID() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-        const r = Math.random() * 16 | 0;
-        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        const r = (Math.random() * 16) | 0;
+        return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
     });
 }
 
 // ─── HTTP 请求 ───────────────────────────────────────────
-
-function sendRequest(options, body) {
+function httpReq(opts, body) {
     return new Promise((resolve, reject) => {
-        const req = https.request(options, (res) => {
+        const req = https.request(opts, (res) => {
             let data = '';
-            res.on('data', (chunk) => data += chunk);
+            res.on('data', (c) => (data += c));
             res.on('end', () => {
                 try { resolve(JSON.parse(data)); }
-                catch { resolve({ raw: data }); }
+                catch { resolve({ _raw: data.slice(0, 200) }); }
             });
         });
         req.on('error', reject);
-        req.write(body);
+        if (body) req.write(body);
         req.end();
     });
 }
 
-// 获取星球信息（名称）
-function fetchGroupInfo(groupId, cookie) {
-    return new Promise((resolve) => {
-        const options = {
-            hostname: 'api.zsxq.com',
-            path: `/v2/groups/${groupId}`,
-            method: 'GET',
-            headers: {
-                'accept': 'application/json, text/plain, */*',
-                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                'referer': 'https://wx.zsxq.com/',
-                'cookie': cookie
-            }
-        };
-        const req = https.request(options, (res) => {
-            let data = '';
-            res.on('data', (chunk) => data += chunk);
-            res.on('end', () => {
-                try { resolve(JSON.parse(data)); }
-                catch { resolve(null); }
-            });
-        });
-        req.on('error', () => resolve(null));
-        req.end();
-    });
-}
+// ─── 知识星球 API ────────────────────────────────────────
 
-// ─── 命令处理 ────────────────────────────────────────────
-
-// config add
-async function cmdConfigAdd(args) {
-    const { name, url, cookie } = args;
-
-    if (!url || !cookie) {
-        console.error('❌ 用法: node zsxq.js config add --url "https://wx.zsxq.com/group/ID" --cookie "..."');
-        process.exit(1);
-    }
-
-    const groupId = extractGroupId(url);
-    if (!groupId) {
-        console.error('❌ 无法从 URL 中提取星球 ID，请确认格式：https://wx.zsxq.com/group/48885154455258');
-        process.exit(1);
-    }
-
-    const token = extractToken(cookie);
-    if (!token) {
-        console.error('❌ 无法从 cookie 中提取 zsxq_access_token');
-        process.exit(1);
-    }
-
-    // 自动获取星球名称
-    let groupName = name;
-    if (!groupName) {
-        process.stdout.write('🔍 正在获取星球信息...');
-        const info = await fetchGroupInfo(groupId, cookie);
-        if (info?.succeeded && info?.resp_data?.group?.name) {
-            groupName = info.resp_data.group.name;
-            console.log(` ✓ 获取到名称：${groupName}`);
-        } else {
-            groupName = `星球_${groupId}`;
-            console.log(` ⚠️  未能获取名称，使用默认：${groupName}`);
+// 获取星球信息（自动命名）
+async function fetchGroupInfo(groupId, cookie) {
+    const ts = Math.floor(Date.now() / 1000).toString();
+    const r = await httpReq({
+        hostname: 'api.zsxq.com',
+        path: `/v2/groups/${groupId}`,
+        method: 'GET',
+        headers: {
+            'accept': 'application/json',
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            'referer': 'https://wx.zsxq.com/',
+            'x-request-id': genUUID(),
+            'x-signature': genSig(ts, ''),
+            'x-timestamp': ts,
+            'x-version': '2.89.0',
+            'cookie': cookie
         }
-    }
-
-    const config = loadConfig();
-    config.groups[groupName] = { groupId, cookie, url };
-
-    // 如果是第一个，设为默认
-    if (!config.default) {
-        config.default = groupName;
-        console.log(`⭐ 已设为默认星球`);
-    }
-
-    saveConfig(config);
-    console.log(`✅ 已添加星球：${groupName}（ID: ${groupId}）`);
-    console.log(`📁 配置已保存到 ${CONFIG_FILE}`);
+    }, null);
+    return r;
 }
 
-// config list
-function cmdConfigList() {
-    const config = loadConfig();
-    const groups = Object.entries(config.groups);
-
-    if (groups.length === 0) {
-        console.log('📭 暂无配置的星球');
-        console.log('');
-        console.log('添加星球：');
-        console.log('  node zsxq.js config add --url "https://wx.zsxq.com/group/ID" --cookie "..."');
-        return;
-    }
-
-    console.log('📋 已配置的知识星球：');
-    console.log('');
-    groups.forEach(([name, info]) => {
-        const isDefault = name === config.default;
-        console.log(`  ${isDefault ? '⭐' : '  '} ${name}`);
-        console.log(`     星球ID：${info.groupId}`);
-        console.log(`     链接：${info.url}`);
-        console.log('');
-    });
-    console.log(`默认星球：${config.default || '未设置'}`);
-}
-
-// config remove
-function cmdConfigRemove(args) {
-    const { name } = args;
-    if (!name) {
-        console.error('❌ 用法: node zsxq.js config remove --name "星球名称"');
-        process.exit(1);
-    }
-
-    const config = loadConfig();
-    if (!config.groups[name]) {
-        console.error(`❌ 未找到星球：${name}`);
-        process.exit(1);
-    }
-
-    delete config.groups[name];
-    if (config.default === name) {
-        const remaining = Object.keys(config.groups);
-        config.default = remaining.length > 0 ? remaining[0] : null;
-        if (config.default) console.log(`⭐ 默认星球已切换为：${config.default}`);
-    }
-
-    saveConfig(config);
-    console.log(`✅ 已移除星球：${name}`);
-}
-
-// config default
-function cmdConfigDefault(args) {
-    const { name } = args;
-    if (!name) {
-        console.error('❌ 用法: node zsxq.js config default --name "星球名称"');
-        process.exit(1);
-    }
-
-    const config = loadConfig();
-    if (!config.groups[name]) {
-        console.error(`❌ 未找到星球：${name}`);
-        process.exit(1);
-    }
-
-    config.default = name;
-    saveConfig(config);
-    console.log(`⭐ 默认星球已设置为：${name}`);
-}
-
-// post
-async function cmdPost(args) {
-    let { name, text, file } = args;
-
-    // 支持从文件读取内容
-    if (file) {
-        if (!fs.existsSync(file)) {
-            console.error(`❌ 文件不存在：${file}`);
-            process.exit(1);
+// Step 1: 获取图片上传 token
+async function step1_getUploadToken(cookie, fileSize) {
+    const ts = Math.floor(Date.now() / 1000).toString();
+    const body = JSON.stringify({ req_data: { type: 'image', size: fileSize || 0, name: '', hash: '' } });
+    const r = await httpReq({
+        hostname: 'api.zsxq.com',
+        path: '/v2/uploads',
+        method: 'POST',
+        headers: {
+            'accept': 'application/json, text/plain, */*',
+            'content-type': 'text/plain',
+            'content-length': Buffer.byteLength(body),
+            'origin': 'https://wx.zsxq.com',
+            'referer': 'https://wx.zsxq.com/',
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            'x-request-id': genUUID(),
+            'x-signature': genSig(ts, body),
+            'x-timestamp': ts,
+            'x-version': '2.89.0',
+            'cookie': cookie
         }
-        text = fs.readFileSync(file, 'utf8').trim();
-    }
+    }, body);
+    return r?.succeeded ? r.resp_data?.upload_token : null;
+}
 
-    if (!text) {
-        console.error('❌ 用法: node zsxq.js post --text "帖子内容" [--name "星球名称"]');
-        console.error('       node zsxq.js post --file "/path/to/post.txt" [--name "星球名称"]');
-        process.exit(1);
-    }
+// Step 2: 上传图片到七牛
+async function step2_uploadToQiniu(uploadToken, fileBuffer, filename) {
+    const boundary = '----WebKitFormBoundary' + Math.random().toString(36).slice(2);
+    const CRLF = '\r\n';
+    const mimeMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
+    const mime = mimeMap[filename.split('.').pop()] || 'image/jpeg';
+    const basename = path.basename(filename);
 
-    const config = loadConfig();
+    // 文件字段在前，token 在后（与浏览器行为一致）
+    const header = `--${boundary}${CRLF}Content-Disposition: form-data; name="file"; filename="${basename}"${CRLF}Content-Type: ${mime}${CRLF}${CRLF}`;
+    const footer = `${CRLF}--${boundary}${CRLF}Content-Disposition: form-data; name="token"${CRLF}${CRLF}${uploadToken}${CRLF}--${boundary}--${CRLF}`;
 
-    // 选择目标星球
-    const targetName = name || config.default;
-    if (!targetName) {
-        console.error('❌ 未指定星球，且没有默认星球');
-        console.error('请先添加星球：node zsxq.js config add --url "..." --cookie "..."');
-        process.exit(1);
-    }
+    const fullBody = Buffer.concat([
+        Buffer.from(header, 'utf8'),
+        fileBuffer,
+        Buffer.from(footer, 'utf8')
+    ]);
 
-    const group = config.groups[targetName];
-    if (!group) {
-        console.error(`❌ 未找到星球：${targetName}`);
-        console.error('查看已配置的星球：node zsxq.js config list');
-        process.exit(1);
-    }
+    const r = await httpReq({
+        hostname: 'upload-z1.qiniup.com',
+        path: '/',
+        method: 'POST',
+        headers: {
+            'accept': 'application/json',
+            'referer': 'https://wx.zsxq.com/',
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            'x-request-id': genUUID(),
+            'x-version': '2.89.0',
+            'content-type': `multipart/form-data; boundary=${boundary}`,
+            'content-length': fullBody.length
+        }
+    }, fullBody);
 
-    console.log(`📮 发帖到：${targetName}（ID: ${group.groupId}）`);
+    return r?.succeeded ? r.resp_data?.image_id : null;
+}
 
-    // 构建请求体
+// Step 3: 发帖
+async function step3_postTopic(group, text, imageIds) {
+    const ts = Math.floor(Date.now() / 1000).toString();
     const body = JSON.stringify({
-        req_data: {
-            type: 'topic',
-            text,
-            image_ids: [],
-            file_ids: [],
-            mentioned_user_ids: []
-        }
+        req_data: { type: 'topic', text, image_ids: imageIds || [], file_ids: [], mentioned_user_ids: [] }
     });
-
-    // 生成签名
-    const timestamp = Math.floor(Date.now() / 1000).toString();
-    const signature = generateSignature(timestamp, body);
-    const requestId = generateUUID();
-
-    console.log('🚀 正在发帖...');
-
-    const options = {
+    return httpReq({
         hostname: 'api.zsxq.com',
         path: `/v2/groups/${group.groupId}/topics`,
         method: 'POST',
         headers: {
             'accept': 'application/json, text/plain, */*',
             'accept-language': 'zh-CN,zh;q=0.9',
-            'cache-control': 'no-cache',
             'content-type': 'application/json',
             'content-length': Buffer.byteLength(body),
-            'dnt': '1',
             'origin': 'https://wx.zsxq.com',
-            'pragma': 'no-cache',
             'referer': 'https://wx.zsxq.com/',
             'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
-            'x-request-id': requestId,
-            'x-signature': signature,
-            'x-timestamp': timestamp,
+            'x-request-id': genUUID(),
+            'x-signature': genSig(ts, body),
+            'x-timestamp': ts,
             'x-version': '2.89.0',
             'cookie': group.cookie
         }
-    };
+    }, body);
+}
 
-    const result = await sendRequest(options, body);
+// ─── 命令 ────────────────────────────────────────────────
 
-    if (result.succeeded) {
-        console.log('✅ 发帖成功！');
-        const topicId = result.resp_data?.topic?.topic_id;
-        if (topicId) console.log(`📌 帖子ID：${topicId}`);
-    } else {
-        console.error('❌ 发帖失败');
-        console.error('响应:', JSON.stringify(result, null, 2));
-        if (result.code === 401) {
-            console.error(`\n⚠️  Cookie 已过期，请更新 "${targetName}" 的 cookie：`);
-            console.error(`  node zsxq.js config add --name "${targetName}" --url "${group.url}" --cookie "新的COOKIE"`);
+async function cmdConfigAdd(args) {
+    const { name, url, cookie } = args;
+    if (!url || !cookie) { console.error('❌ 用法: node zsxq.js config add --url "..." --cookie "..." [--name "名称"]'); process.exit(1); }
+
+    const groupId = extractGroupId(url);
+    if (!groupId) { console.error('❌ URL 格式错误，示例：https://wx.zsxq.com/group/48885154455258'); process.exit(1); }
+
+    let groupName = name;
+    if (!groupName) {
+        process.stdout.write('🔍 正在获取星球信息...');
+        const info = await fetchGroupInfo(groupId, cookie);
+        groupName = info?.succeeded && info?.resp_data?.group?.name
+            ? (process.stdout.write(` ✓ ${info.resp_data.group.name}\n`), info.resp_data.group.name)
+            : (console.log(` ⚠️  未能获取，使用默认名称`), `星球_${groupId}`);
+    }
+
+    const cfg = loadConfig();
+    cfg.groups[groupName] = { groupId, cookie, url };
+    if (!cfg.default) { cfg.default = groupName; console.log(`⭐ 已设为默认星球`); }
+    saveConfig(cfg);
+    ok(`已添加星球：${groupName}（ID: ${groupId}）`);
+}
+
+function cmdConfigList() {
+    const cfg = loadConfig();
+    const groups = Object.entries(cfg.groups);
+    if (!groups.length) { console.log('📭 暂无配置的星球'); return; }
+    console.log('📋 已配置的知识星球：\n');
+    groups.forEach(([n, g]) => console.log(`  ${n === cfg.default ? '⭐' : '  '} ${n}  |  ID: ${g.groupId}`));
+    console.log(`\n默认星球：${cfg.default || '未设置'}`);
+}
+
+function cmdConfigRemove(args) {
+    const { name } = args;
+    if (!name) { console.error('❌ 用法: node zsxq.js config remove --name "名称"'); process.exit(1); }
+    const cfg = loadConfig();
+    if (!cfg.groups[name]) { console.error(`❌ 未找到星球：${name}`); process.exit(1); }
+    delete cfg.groups[name];
+    if (cfg.default === name) {
+        const rem = Object.keys(cfg.groups);
+        cfg.default = rem[0] || null;
+    }
+    saveConfig(cfg);
+    ok(`已移除：${name}`);
+}
+
+function cmdConfigDefault(args) {
+    const { name } = args;
+    if (!name) { console.error('❌ 用法: node zsxq.js config default --name "名称"'); process.exit(1); }
+    const cfg = loadConfig();
+    if (!cfg.groups[name]) { console.error(`❌ 未找到星球：${name}`); process.exit(1); }
+    cfg.default = name;
+    saveConfig(cfg);
+    ok(`默认星球已设置为：${name}`);
+}
+
+async function cmdPost(args) {
+    let { name, text, file, images } = args;
+
+    if (file) {
+        if (!fs.existsSync(file)) { console.error(`❌ 文件不存在：${file}`); process.exit(1); }
+        text = fs.readFileSync(file, 'utf8').trim();
+    }
+    if (!text) {
+        console.error('❌ 用法: node zsxq.js post --text "内容" [--name "星球"] [--images "a.jpg,b.png"]');
+        console.error('       node zsxq.js post --file "/path.txt" [--images "a.jpg"]');
+        process.exit(1);
+    }
+
+    const cfg = loadConfig();
+    const target = name || cfg.default;
+    if (!target) { console.error('❌ 未指定星球且无默认星球，请先添加：node zsxq.js config add ...'); process.exit(1); }
+    const group = cfg.groups[target];
+    if (!group) { console.error(`❌ 未找到星球：${target}`); process.exit(1); }
+
+    inf(`发帖到：${target}（${group.groupId}）`);
+
+    // ─── 图片处理 ───────────────────────────────────────
+    let imageIds = [];
+    if (images) {
+        const paths = images.split(',').map((p) => p.trim()).filter(Boolean);
+        if (paths.length > 9) { inf(`图片最多9张，已截断`); paths.length = 9; }
+        inf(`上传 ${paths.length} 张图片...`);
+
+        for (let i = 0; i < paths.length; i++) {
+            const p = paths[i];
+            if (!fs.existsSync(p)) { inf(`跳过不存在的文件：${p}`); continue; }
+
+            process.stdout.write(`  [${i + 1}/${paths.length}] ${path.basename(p)} ... `);
+            try {
+                const buf = fs.readFileSync(p);
+                const token = await step1_getUploadToken(group.cookie, buf.length);
+                if (!token) { console.log('❌ 获取 upload_token 失败'); continue; }
+                const id = await step2_uploadToQiniu(token, buf, p);
+                if (!id) { console.log('❌ 上传失败'); continue; }
+                imageIds.push(id);
+                console.log(`✓ ${id}`);
+            } catch (e) {
+                console.log(`❌ ${e.message}`);
+            }
         }
+        ok(`图片处理完成（${imageIds.length}/${paths.length} 成功）`);
+    }
+
+    // ─── 发帖 ───────────────────────────────────────────
+    inf('正在发帖...');
+    const r = await step3_postTopic(group, text, imageIds);
+
+    if (r.succeeded) {
+        ok('发帖成功！');
+        const tid = r.resp_data?.topic?.topic_id;
+        if (tid) console.log(`${G}📌 帖子ID：${tid}${N}`);
+        if (imageIds.length) console.log(`${G}📷 附带图片：${imageIds.length} 张${N}`);
+    } else {
+        console.error(`\n❌ 发帖失败 (code: ${r.code})`);
+        console.error('响应:', JSON.stringify(r).slice(0, 300));
         process.exit(1);
     }
 }
 
 // ─── 入口 ────────────────────────────────────────────────
-
 function parseArgs(argv) {
     const params = {};
     for (let i = 0; i < argv.length; i++) {
         if (argv[i].startsWith('--')) {
-            const key = argv[i].slice(2);
-            // 支持 --key value 和 --key=value 两种格式
-            if (argv[i].includes('=')) {
-                const [k, ...v] = argv[i].slice(2).split('=');
-                params[k] = v.join('=');
+            let k = argv[i].slice(2);
+            let v;
+            if (k.includes('=')) {
+                [k, ...v] = k.split('=');
+                v = v.join('=');
             } else {
-                params[key] = argv[i + 1] || true;
-                i++;
+                v = argv[i + 1];
+                if (v && !v.startsWith('--')) i++;
+                else v = true;
             }
+            params[k] = v;
         }
     }
     return params;
@@ -350,66 +331,46 @@ function parseArgs(argv) {
 
 function showHelp() {
     console.log(`
-知识星球 CLI 工具 🦞
+知识星球 CLI v2.0 🦞
 
 命令：
-  config add      添加/更新星球配置
-  config list     查看所有已配置的星球
-  config remove   移除星球配置
+  config add      添加星球（自动获取名称）
+  config list     查看已配置的星球
+  config remove   移除星球
   config default  设置默认星球
-  post            发帖
+  post            发帖（支持图片）
+
+发帖选项：
+  --text          帖子内容
+  --file          从文件读取内容
+  --images        图片路径，最多9张，逗号分隔
+  --name          指定星球（不指定则用默认）
 
 示例：
-  # 添加星球（自动获取名称）
-  node zsxq.js config add \\
-    --url "https://wx.zsxq.com/group/48885154455258" \\
-    --cookie "zsxq_access_token=..."
-
-  # 添加星球（手动指定名称）
-  node zsxq.js config add \\
-    --name "小傅哥星球" \\
-    --url "https://wx.zsxq.com/group/48885154455258" \\
-    --cookie "zsxq_access_token=..."
-
-  # 查看已配置的星球
-  node zsxq.js config list
-
-  # 发帖到默认星球
-  node zsxq.js post --text "Hello 知识星球！"
-
-  # 从文件读取内容发帖
-  node zsxq.js post --file "/path/to/post.txt"
-
-  # 发帖到指定星球
-  node zsxq.js post --name "小傅哥星球" --text "Hello！"
-
-  # 设置默认星球
-  node zsxq.js config default --name "小傅哥星球"
+  node zsxq.js config add --url "https://wx.zsxq.com/group/ID" --cookie "..."
+  node zsxq.js post --text "Hello" --images "/path/a.jpg,/path/b.png"
+  node zsxq.js post --file "/tmp/post.txt" --images "/path/cover.png"
 
 配置文件：~/.xfg-zsxq/groups.json
 `);
 }
 
 async function main() {
-    const [,, cmd, sub, ...rest] = process.argv;
-    const args = parseArgs(rest);
+    const args = process.argv.slice(2);
+    const cmd = args[0];
 
-    if (!cmd || cmd === '--help' || cmd === 'help') {
-        showHelp();
-        return;
-    }
+    if (!cmd || cmd === '--help' || cmd === 'help') { showHelp(); return; }
 
-    if (cmd === 'config') {
-        if (sub === 'add')     return await cmdConfigAdd(args);
-        if (sub === 'list')    return cmdConfigList();
-        if (sub === 'remove')  return cmdConfigRemove(args);
-        if (sub === 'default') return cmdConfigDefault(args);
-        console.error(`❌ 未知子命令: config ${sub}`);
-        showHelp();
-    } else if (cmd === 'post') {
-        // post 命令的参数紧跟在 post 后面
-        const postArgs = parseArgs([sub, ...rest].filter(Boolean));
-        return await cmdPost(postArgs);
+    if (cmd === 'post') {
+        await cmdPost(parseArgs(args.slice(1)));
+    } else if (cmd === 'config') {
+        const sub = args[1];
+        const params = parseArgs(args.slice(2));
+        if (sub === 'add')     await cmdConfigAdd(params);
+        else if (sub === 'list')    cmdConfigList();
+        else if (sub === 'remove')  cmdConfigRemove(params);
+        else if (sub === 'default') cmdConfigDefault(params);
+        else { console.error(`❌ 未知子命令: config ${sub}`); showHelp(); }
     } else {
         console.error(`❌ 未知命令: ${cmd}`);
         showHelp();
