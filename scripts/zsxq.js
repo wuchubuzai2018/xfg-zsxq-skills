@@ -191,11 +191,12 @@ async function step3_postTopic(group, text, imageIds) {
             'content-length': Buffer.byteLength(body),
             'origin': 'https://wx.zsxq.com',
             'referer': 'https://wx.zsxq.com/',
-            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
             'x-request-id': genUUID(),
             'x-signature': genSig(ts, body),
             'x-timestamp': ts,
             'x-version': '2.89.0',
+            'x-aduid': genAduid(),
             'cookie': group.cookie
         }
     }, body);
