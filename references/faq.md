@@ -95,3 +95,21 @@ bash -x scripts/post.sh --token "xxx" --text "test"
 ```bash
 set -x  # 开启调试模式
 ```
+
+## Q11: Mac苹果系统如何排查Node not found in PATH问题？
+
+- mac可能安装了nvm来管理node版本，但是当前环境下可能未加载node，尝试执行
+```bash
+
+source ~/.nvm/nvm.sh && nvm list
+
+```
+或
+```bash
+
+source ~/.nvm/nvm.sh && nvm use [指定版本号] && node --version
+
+```
+或
+
+
