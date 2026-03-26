@@ -1,0 +1,24 @@
+curl 'https://api.zsxq.com/v2/groups/48885154455258/topics' \
+  -H 'accept: application/json, text/plain, */*' \
+  -H 'accept-language: zh-CN,zh;q=0.9' \
+  -H 'cache-control: no-cache' \
+  -H 'content-type: application/json' \
+  -b 'sajssdk_2015_cross_new_user=1; sensorsdata2015jssdkcross=%7B%22distinct_id%22%3A%2219d22b7be0a185f-023fa19b491cdda-19525631-1930176-19d22b7be0b21d9%22%2C%22first_id%22%3A%22%22%2C%22props%22%3A%7B%22%24latest_traffic_source_type%22%3A%22%E5%BC%95%E8%8D%90%E6%B5%81%E9%87%8F%22%2C%22%24latest_search_keyword%22%3A%22%E6%9C%AA%E5%8F%96%E5%88%B0%E5%80%BC%22%2C%22%24latest_referrer%22%3A%22https%3A%2F%2Fbugstack.cn%2F%22%7D%2C%22identities%22%3A%22eyIkaWRlbnRpdHlfY29va2llX2lkIjoiMTlkMjJiN2JlMGExODVmLTAyM2ZhMTliNDkxY2RkYS0xOTUyNTYzMS0xOTMwMTc2LTE5ZDIyYjdiZTBiMjFkOSJ9%22%2C%22history_login_id%22%3A%7B%22name%22%3A%22%22%2C%22value%22%3A%22%22%7D%7D; zsxq_access_token=85034009-ACAB-4F23-A200-0FD488D2D520_D625BA7FD9CBBDFA; abtest_env=product' \
+  -H 'dnt: 1' \
+  -H 'origin: https://wx.zsxq.com' \
+  -H 'pragma: no-cache' \
+  -H 'priority: u=1, i' \
+  -H 'referer: https://wx.zsxq.com/' \
+  -H 'sec-ch-ua: "Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"' \
+  -H 'sec-ch-ua-mobile: ?0' \
+  -H 'sec-ch-ua-platform: "macOS"' \
+  -H 'sec-fetch-dest: empty' \
+  -H 'sec-fetch-mode: cors' \
+  -H 'sec-fetch-site: same-site' \
+  -H 'user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36' \
+  -H 'x-aduid: a405ef922-a31f-0236-a455-8e867a9ace8' \
+  -H 'x-request-id: c5aba2394-1790-4f97-84c8-ebca01cb272' \
+  -H 'x-signature: 9a50178a81cd42977b7688a2a347a1218c5025fe' \
+  -H 'x-timestamp: 1774404109' \
+  -H 'x-version: 2.89.0' \
+  --data-raw '{"req_data":{"type":"topic","text":"测试\n","image_ids":[],"file_ids":[],"mentioned_user_ids":[]}}'
